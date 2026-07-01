@@ -1,0 +1,91 @@
+version: "3.8"
+
+# ============================================
+# AI ANIMATED STORY WORKFLOW - DOCKER COMPOSE
+# Stack: n8n (orchestration) + FastAPI (generation)
+# External Services: ComfyUI & Ollama (on host)
+# ============================================
+#
+# Network: story-net bridges n8n and API
+# Shared Volume: /data for all generated content
+# ComfyUI & Ollama: accessed via host.docker.internal
+#
+# Commands:
+#   Start:   docker compose up -d --build
+#   Logs:    docker compose logs -f
+#   Stop:    docker compose down
+#
+
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    ports:
+      - "5679:5678"
+    environment:
+      - GENERIC_TIMEZONE=America/New_York
+      - TZ=America/New_York
+      - N8N_SECURE_COOKIE=false
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./data:/data
+      - ./credentials:/data/credentials
+    networks:
+      - story-net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:5678/',res=>process.exit(res.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  api:
+    build: ./api
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      # === ComfyUI & Ollama (on host machine) ===
+      - COMFYUI_URL=http://host.docker.internal:8188
+      - OLLAMA_URL=http://host.docker.internal:11434
+      - SADTALKER_URL=http://host.docker.internal:8189
+      
+      # === Data directory (shared volume) ===
+      - DATA_DIR=/data
+      
+      # === API Keys (optional, add to .env file) ===
+      - PEXELS_API_KEY=${PEXELS_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - POLLINATIONS_API_KEY=${POLLINATIONS_API_KEY:-}
+      - POLLINATIONS_MODEL=${POLLINATIONS_MODEL:-flux}
+      
+      # === YouTube OAuth Credentials ===
+      - CREDENTIALS_DIR=/data/credentials
+    volumes:
+      - ./data:/data
+      - ./credentials:/data/credentials
+    networks:
+      - story-net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  n8n_data:
+    driver: local
+  shared_data:
+    driver: local
+networks:
+  story-net:
+    driver: bridge

@@ -1,0 +1,10 @@
+fastapi==0.115.*
+uvicorn[standard]==0.34.*
+edge-tts>=7.0
+gTTS>=2.5
+aiohttp>=3.9
+requests>=2.31
+Pillow>=10.0
+google-auth==2.*
+google-auth-oauthlib==1.*
+google-api-python-client==2.*

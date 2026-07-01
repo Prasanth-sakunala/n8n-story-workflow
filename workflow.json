@@ -1,0 +1,657 @@
+{
+  "name": "AI Animated Story - YouTube Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "id": "f341c8ce-21e8-4825-a3f0-f5c16094724c",
+      "name": "Daily Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        25968,
+        4288
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "ccb66110-f23e-4dcb-b825-20a39d7d9a72",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        25968,
+        4480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8001/api/fetch-story-ideas",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ useReddit: true, useLocalSeeds: true, redditLimit: 25, preferGenre: '', maxResults: 20 }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "b9521271-7324-45fa-8b5f-79a6539c2a41",
+      "name": "Fetch Story Ideas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        26256,
+        4368
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8001/api/pick-story",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ ideas: $json.ideas, preferGenre: '', preferLocal: true, randomness: 0.2 }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "a29f45d3-8d00-4a13-ac82-6e4f4ef04902",
+      "name": "Pick Best Story",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        26528,
+        4368
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================\n// PREPARE STORY CONTEXT FOR SCRIPT GENERATION\n// Merges selected story + character details + series config\n// Output goes to Node 2 (Ollama Script Generation)\n// ============================================\n\nconst data = $input.first().json;\nconst story = data.selectedStory;\nconst characters = data.characterDetails;\nconst series = data.seriesConfig;\n\n// Build character descriptions for the LLM prompt\nconst characterDescriptions = Object.entries(characters || {}).map(([id, char]) => {\n  return `- ${char.name}: ${char.personality}. Catchphrase: \"${char.catchphrase}\". Voice: ${char.voiceId}`;\n}).join('\\n');\n\n// Count episode number\nconst episodeNumber = (series.episodeCount || 0) + 1;\n\nreturn [{\n  json: {\n    // Story details\n    storyTitle: story.title,\n    storyPremise: story.premise,\n    storyGenre: story.genre,\n    storyThemes: story.themes || [],\n    storyMood: story.mood || 'exciting',\n    storySource: story.source,\n    storyScore: story.score,\n\n    // Character info (for LLM prompt)\n    characters: characters,\n    characterDescriptions: characterDescriptions,\n    characterIds: story.characters || [],\n\n    // Series info\n    seriesName: series.name || 'Finn, Squeaky & Misty Adventures',\n    seriesStyle: series.style || '2d cartoon, anime cel shading, clean lineart, flat colors, vibrant palette',\n    seriesGenre: series.genre || 'adventure',\n    checkpoint: series.checkpoint || '',\n    negativePrompt: series.negativePrompt || '',\n    episodeNumber: episodeNumber,\n\n    // Rankings (for debugging)\n    rankedIdeas: data.rankedIdeas || [],\n    totalScored: data.totalScored || 0,\n\n    // Timestamps\n    pickedAt: data.pickedAt,\n    pipelineStartedAt: new Date().toISOString()\n  }\n}];\n"
+      },
+      "id": "48d0fcc4-c8b2-4554-8b0f-5e5a1cfc4c2c",
+      "name": "Prepare Story Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        26816,
+        4368
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8001/api/generate-script",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ storyTitle: $json.storyTitle, storyPremise: $json.storyPremise, storyGenre: $json.storyGenre, storyThemes: $json.storyThemes, storyMood: $json.storyMood, characters: $json.characters, characterDescriptions: $json.characterDescriptions, characterIds: $json.characterIds, seriesName: $json.seriesName, seriesStyle: $json.seriesStyle, seriesGenre: $json.seriesGenre, checkpoint: $json.checkpoint, negativePrompt: $json.negativePrompt, episodeNumber: $json.episodeNumber, targetDuration: 2, pacingMode: 'retention', provider: 'auto' }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 600000
+        }
+      },
+      "id": "6c37f2f5-249c-4f48-8a67-5fd4c65c1ba4",
+      "name": "Generate Script (LLM)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        27088,
+        4368
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================\n// STRUCTURE SCRIPT OUTPUT\n// Validate script, merge with pipeline context\n// Prepare data for Node 3 (Scene Planner)\n// ============================================\n\nconst prevData = $('Prepare Story Context').first().json;\nconst result = $input.first().json;\nconst script = result.script;\n\n// Merge scene data with character visual prompts\nconst characters = prevData.characters || {};\nconst scenes = (script.scenes || []).map((scene, i) => {\n  // Enrich each scene with character prompt data for image generation\n  const sceneChars = {};\n  for (const cid of (scene.charactersInScene || [])) {\n    if (characters[cid]) {\n      sceneChars[cid] = {\n        name: characters[cid].name,\n        prompt: characters[cid].prompt,\n        loraFile: characters[cid].loraFile || '',\n        loraWeight: characters[cid].loraWeight || 0.8,\n        voiceId: characters[cid].voiceId || 'en-US-DavisNeural',\n        ipAdapterRef: characters[cid].ipAdapterRef || ''\n      };\n    }\n  }\n  return {\n    ...scene,\n    sceneNumber: i + 1,\n    characterPrompts: sceneChars\n  };\n});\n\nreturn [{\n  json: {\n    // Script data\n    title: script.title,\n    description: script.description,\n    tags: script.tags || [],\n    scenes: scenes,\n    fullNarration: script.fullNarration,\n    thumbnailDescription: script.thumbnailDescription || '',\n    cliffhanger: script.cliffhanger || '',\n    totalScenes: scenes.length,\n    estimatedDuration: script.estimatedDuration || 0,\n\n    // LLM metadata\n    llmProvider: result.provider,\n    promptLength: result.prompt_length,\n    responseLength: result.response_length,\n    llmErrors: result.errors || [],\n\n    // Pipeline context (pass through)\n    seriesName: prevData.seriesName,\n    seriesStyle: prevData.seriesStyle,\n    checkpoint: prevData.checkpoint,\n    negativePrompt: prevData.negativePrompt,\n    episodeNumber: prevData.episodeNumber,\n    storyTitle: prevData.storyTitle,\n    storySource: prevData.storySource,\n    characters: prevData.characters,\n    characterIds: prevData.characterIds,\n\n    // Timestamps\n    pipelineStartedAt: prevData.pipelineStartedAt,\n    scriptGeneratedAt: new Date().toISOString()\n  }\n}];\n"
+      },
+      "id": "23c8b069-1b58-4f6f-99a3-21c16375ab10",
+      "name": "Structure Script Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        27376,
+        4368
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8001/api/plan-scenes",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ title: $json.title, description: $json.description, tags: $json.tags, scenes: $json.scenes, fullNarration: $json.fullNarration, thumbnailDescription: $json.thumbnailDescription, cliffhanger: $json.cliffhanger, totalScenes: $json.totalScenes, estimatedDuration: $json.estimatedDuration, seriesName: $json.seriesName, seriesStyle: $json.seriesStyle, checkpoint: $json.checkpoint, negativePrompt: $json.negativePrompt, episodeNumber: $json.episodeNumber, characters: $json.characters, characterIds: $json.characterIds, imageWidth: 512, imageHeight: 384, animateFrames: 16, animateSteps: 15, imageSteps: 20, imageCfg: 7.0, animateCfg: 6.5, motionModule: 'v3_sd15_mm.ckpt', sampler: 'euler_ancestral', scheduler: 'normal', imageDir: '/data/images', clipDir: '/data/clips', audioDir: '/data/audio', videoDir: '/data/video', narratorVoice: 'en-GB-RyanNeural', ttsRate: '-5%', ttsPitch: '+0Hz', videoWidth: 1920, videoHeight: 1080, fps: 12, wordsPerMinute: 160 }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "31a19b32-472c-4772-a203-46f88ae897d1",
+      "name": "Plan Scenes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        27648,
+        4368
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================\n// COLLECT SCENE PLAN & PREPARE FOR GENERATION\n// Split into image tasks, animation tasks, audio tasks\n// This is the last planning node before actual generation\n// ============================================\n\nconst plan = $input.first().json;\nconst prevData = $('Structure Script Output').first().json;\n\n// Extract all image tasks for batch processing\nconst imageTasks = plan.scenes.map(s => s.imageTask);\n\n// Extract all animation tasks\nconst animationTasks = plan.scenes.map(s => s.animationTask);\n\n// Extract all audio tasks (flatten per-scene arrays)\nconst audioTasksFlat = [];\nfor (const scene of plan.scenes) {\n  for (const task of (scene.audioTasks || [])) {\n    audioTasksFlat.push({\n      ...task,\n      sceneNumber: scene.sceneNumber\n    });\n  }\n}\n\n// Build scene summaries for logging\nconst sceneSummaries = plan.scenes.map(s => ({\n  scene: s.sceneNumber,\n  duration: s.duration + 's',\n  emotion: s.emotion,\n  camera: s.cameraAngle,\n  characters: s.charactersInScene.length,\n  audioFiles: s.audioTasks.length,\n  hasLoRA: s.imageTask.loras.length > 0\n}));\n\nreturn [{\n  json: {\n    // Generation task lists\n    imageTasks: imageTasks,\n    animationTasks: animationTasks,\n    audioTasks: audioTasksFlat,\n    thumbnailTask: plan.thumbnailTask,\n    manualImageGuide: plan.manualImageGuide || {},\n    fullNarrationTask: plan.fullNarrationTask,\n\n    // Scene plan (full detail for assembly node later)\n    scenes: plan.scenes,\n\n    // Metadata\n    metadata: plan.metadata,\n    settings: plan.settings,\n    directories: plan.directories,\n\n    // Stats\n    totalScenes: plan.totalScenes,\n    estimatedDuration: plan.estimatedDuration,\n    totalImageTasks: imageTasks.length,\n    totalAnimationTasks: animationTasks.length,\n    totalAudioTasks: audioTasksFlat.length,\n    hasLoRAs: plan.hasLoRAs,\n    sceneSummaries: sceneSummaries,\n\n    // Pipeline tracking\n    pipelineStartedAt: prevData.pipelineStartedAt,\n    scriptGeneratedAt: prevData.scriptGeneratedAt,\n    scenesPlannedAt: new Date().toISOString()\n  }\n}];\n"
+      },
+      "id": "77f11731-43ae-4094-b51b-75c973e809b5",
+      "name": "Collect Scene Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        27936,
+        4368
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================\n// COLLECT VISUAL RESULTS\n// Map generated images + clips back to scenes\n// Prepare data for Node 5 (Audio Generation)\n// ============================================\n\nconst visuals = $input.first().json;\nconst planData = $('Collect Scene Plan').first().json;\n\nif (!visuals.success) {\n  throw new Error('Visual generation failed: ' + JSON.stringify(visuals));\n}\n\n// Build per-scene visual result map\nconst imageMap = {};\nfor (const img of (visuals.images || [])) {\n  imageMap[img.scene] = img;\n}\nconst clipMap = {};\nfor (const clip of (visuals.clips || [])) {\n  clipMap[clip.scene] = clip;\n}\n\n// Enrich scenes with visual generation results\nconst enrichedScenes = (planData.scenes || []).map((scene, i) => {\n  const sn = scene.sceneNumber || (i + 1);\n  const img = imageMap[sn] || {};\n  const clip = clipMap[sn] || {};\n  return {\n    ...scene,\n    imageResult: {\n      success: img.success || false,\n      path: img.path || '',\n      filename: img.filename || '',\n      method: img.method || 'none',\n      error: img.error || ''\n    },\n    clipResult: {\n      success: clip.success || false,\n      path: clip.path || '',\n      filename: clip.filename || '',\n      method: clip.method || 'none',\n      secondKeyframePath: clip.secondKeyframePath || '',\n      error: clip.error || ''\n    }\n  };\n});\n\n// Count successes\nconst imgOk = enrichedScenes.filter(s => s.imageResult.success).length;\nconst clipOk = enrichedScenes.filter(s => s.clipResult.success).length;\nconst adClips = enrichedScenes.filter(s => s.clipResult.method === 'animatediff').length;\nconst kbClips = enrichedScenes.filter(s => s.clipResult.method === 'ken_burns').length;\n\nif (imgOk !== enrichedScenes.length || clipOk !== enrichedScenes.length) {\n  throw new Error(`Visual generation incomplete: ${imgOk}/${enrichedScenes.length} images, ${clipOk}/${enrichedScenes.length} clips`);\n}\n\nreturn [{\n  json: {\n    // Enriched scenes with visual paths\n    scenes: enrichedScenes,\n\n    // Audio tasks (unchanged, for Node 5)\n    audioTasks: planData.audioTasks,\n    fullNarrationTask: planData.fullNarrationTask,\n\n    // Thumbnail\n    thumbnail: visuals.thumbnail || null,\n\n    // Metadata (pass through)\n    metadata: planData.metadata,\n    settings: planData.settings,\n    directories: planData.directories,\n\n    // Visual generation stats\n    visualStats: {\n      totalScenes: enrichedScenes.length,\n      imagesGenerated: imgOk,\n      clipsGenerated: clipOk,\n      animatediffClips: adClips,\n      kenBurnsClips: kbClips,\n      elapsedSeconds: visuals.elapsedSeconds || 0,\n      hasAnimateDiff: visuals.hasAnimateDiff || false,\n      pollinationsImages: visuals.pollinationsImages || 0,\n      primaryGenerator: visuals.primaryGenerator || 'unknown'\n    },\n\n    // Pipeline tracking\n    pipelineStartedAt: planData.pipelineStartedAt,\n    scriptGeneratedAt: planData.scriptGeneratedAt,\n    scenesPlannedAt: planData.scenesPlannedAt,\n    visualsGeneratedAt: new Date().toISOString()\n  }\n}];\n"
+      },
+      "id": "ac7b5643-dac3-4c71-b587-88fe23712542",
+      "name": "Collect Visual Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        29456,
+        4128
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8001/api/generate-audio",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ audioTasks: $json.audioTasks, fullNarrationTask: $json.fullNarrationTask, scenes: $json.scenes, narratorVoice: 'en-GB-RyanNeural', rate: '-5%', pitch: '+0Hz', maxWordsPerLine: 6, maxCharsPerLine: 35, audioDir: ($json.directories || {}).audio || '/data/audio', subtitleDir: ($json.directories || {}).audio || '/data/audio' }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 600000
+        }
+      },
+      "id": "55fb3374-88cb-48fb-b6e5-d14b49b00dd4",
+      "name": "Generate Audio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        29616,
+        4368
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================\n// COLLECT AUDIO RESULTS\n// Map audio paths + subtitles + durations back to scenes\n// Prepare sync data for Node 6 (Video Assembly)\n// ============================================\n\nconst audio = $input.first().json;\nconst prevData = $('Collect Visual Results').first().json;\n\n// Build audio result map by scene number\nconst audioMap = {};\nfor (const scene of (audio.scenes || [])) {\n  audioMap[scene.sceneNumber] = scene;\n}\n\n// Enrich scenes with audio + subtitle paths and ACTUAL durations\nconst enrichedScenes = (prevData.scenes || []).map((scene, i) => {\n  const sn = scene.sceneNumber || (i + 1);\n  const audioResult = audioMap[sn] || {};\n  return {\n    ...scene,\n    audioResult: {\n      success: audioResult.success || false,\n      combinedAudioPath: audioResult.combinedAudioPath || '',\n      combinedAudioFilename: audioResult.combinedAudioFilename || '',\n      duration: audioResult.duration || 0,\n      subtitlePath: audioResult.subtitlePath || '',\n      subtitleFilename: audioResult.subtitleFilename || '',\n      segments: audioResult.segments || [],\n      wordTimestamps: audioResult.wordTimestamps || []\n    }\n  };\n});\n\n// Build sync map: sceneNumber -> actual audio duration\n// Node 6 uses this to stretch/trim video clips to match audio exactly\nconst syncMap = {};\nfor (const s of enrichedScenes) {\n  if (s.audioResult.success) {\n    syncMap[s.sceneNumber] = {\n      audioDuration: s.audioResult.duration,\n      clipPath: s.clipResult ? s.clipResult.path : '',\n      audioPath: s.audioResult.combinedAudioPath,\n      subtitlePath: s.audioResult.subtitlePath\n    };\n  }\n}\n\nconst audioOk = enrichedScenes.filter(s => s.audioResult.success).length;\n\nreturn [{\n  json: {\n    // Fully enriched scenes (visual + audio + subtitles)\n    scenes: enrichedScenes,\n\n    // Sync data for Node 6 assembly\n    syncMap: syncMap,\n    totalAudioDuration: audio.totalDuration || 0,\n\n    // Full video subtitle\n    fullVideoSubtitle: audio.fullVideoSubtitle || {},\n    fullNarration: audio.fullNarration || null,\n\n    // Thumbnail (pass through)\n    thumbnail: prevData.thumbnail || null,\n\n    // Metadata (pass through)\n    metadata: prevData.metadata,\n    settings: prevData.settings,\n    directories: prevData.directories,\n\n    // Stats\n    audioStats: {\n      totalScenes: audio.totalScenes || 0,\n      scenesGenerated: audioOk,\n      totalDuration: audio.totalDuration || 0,\n      rate: audio.rate || '+0%',\n      narratorVoice: audio.narratorVoice || 'en-US-DavisNeural',\n      elapsedSeconds: audio.elapsedSeconds || 0\n    },\n    visualStats: prevData.visualStats || {},\n\n    // Pipeline tracking\n    pipelineStartedAt: prevData.pipelineStartedAt,\n    scriptGeneratedAt: prevData.scriptGeneratedAt,\n    scenesPlannedAt: prevData.scenesPlannedAt,\n    visualsGeneratedAt: prevData.visualsGeneratedAt,\n    audioGeneratedAt: new Date().toISOString()\n  }\n}];\n"
+      },
+      "id": "de06d068-320f-4bee-ba5b-65155b3ec6fe",
+      "name": "Collect Audio Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        29792,
+        4368
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8001/api/assemble-video",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ (() => { const base = $('Collect Audio Results').first().json || {}; const current = $json || {}; const metadata = base.metadata || current.metadata || {}; const directories = base.directories || current.directories || {}; return JSON.stringify({ scenes: current.scenes || base.scenes || [], syncMap: base.syncMap || current.syncMap || {}, fullVideoSubtitle: base.fullVideoSubtitle || current.fullVideoSubtitle || {}, metadata, settings: base.settings || current.settings || {}, directories, outputFilename: 'episode_' + (metadata.episodeNumber || 1) + '.mp4', videoDir: directories.video || '/data/video', width: 1080, height: 1920, fps: 24, fadeInDuration: 0.3, fadeOutDuration: 0.3, interSceneGap: 0.3, burnSubtitles: false, maxAssemblySeconds: 1800, colorEnhance: true }); })() }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 1800000
+        }
+      },
+      "id": "3c2d27e7-1ba0-485a-a3ba-456c5ce3e85c",
+      "name": "Assemble Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        30032,
+        4368
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================\n// COLLECT ASSEMBLY RESULTS\n// Package final video info for upload/SEO nodes\n// ============================================\n\nconst assembly = $input.first().json;\nconst prevData = $('Collect Audio Results').first().json;\n\nreturn [{\n  json: {\n    // Final video\n    videoPath: assembly.outputPath || '',\n    videoFilename: assembly.outputFilename || '',\n    videoDuration: assembly.duration || 0,\n    videoFileSize: assembly.fileSize || 0,\n    videoFileSizeMB: assembly.fileSizeMB || 0,\n    resolution: assembly.resolution || '1080x1920',\n    subtitlesBurned: assembly.subtitlesBurned || false,\n\n    // Thumbnail (from Node 4)\n    thumbnail: prevData.thumbnail || null,\n\n    // Metadata for upload\n    metadata: prevData.metadata || {},\n\n    // Assembly stats\n    assemblyStats: {\n      scenesAssembled: assembly.scenesAssembled || 0,\n      totalScenes: assembly.totalScenes || 0,\n      elapsedSeconds: assembly.elapsedSeconds || 0,\n      clipDetails: assembly.clipDetails || []\n    },\n    visualStats: prevData.visualStats || {},\n    audioStats: prevData.audioStats || {},\n\n    // Pipeline tracking\n    pipelineStartedAt: prevData.pipelineStartedAt,\n    scriptGeneratedAt: prevData.scriptGeneratedAt,\n    scenesPlannedAt: prevData.scenesPlannedAt,\n    visualsGeneratedAt: prevData.visualsGeneratedAt,\n    audioGeneratedAt: prevData.audioGeneratedAt,\n    videoAssembledAt: new Date().toISOString()\n  }\n}];\n"
+      },
+      "id": "20f5779b-cb32-4f8b-9e04-ee4e94ccee91",
+      "name": "Collect Assembly Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        30192,
+        4368
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8001/api/generate-seo",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ storyTitle: $json.metadata?.storyTitle || '', seriesName: $json.metadata?.seriesName || 'Captain Finn & Squeaky', episodeNumber: $json.metadata?.episodeNumber || 1, genre: $json.metadata?.genre || 'fantasy_adventure', targetAudience: 'kids 4-10, families', description: $json.metadata?.description || '', scenes: $json.metadata?.scenes || [], characters: $json.metadata?.characters || [], videoDuration: $json.videoDuration || 0, channelName: $json.metadata?.channelName || '', channelTagline: $json.metadata?.channelTagline || '', provider: 'auto', geminiApiKey: '', groqApiKey: '' }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "83c1a666-9497-4046-b1d0-fcf0bd25556a",
+      "name": "Generate SEO",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        30464,
+        4368
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================\n// COLLECT SEO RESULTS\n// Package SEO metadata for thumbnail + upload nodes\n// ============================================\n\nconst seoResp = $input.first().json;\nconst prevData = $('Collect Assembly Results').first().json;\n\nconst seo = seoResp.seo || {};\n\nreturn [{\n  json: {\n    // SEO metadata\n    youtubeTitle: seo.title || prevData.metadata?.storyTitle || 'Untitled Episode',\n    youtubeDescription: seo.description || '',\n    youtubeTags: seo.tags || [],\n    youtubeCategory: seo.category || 'Film & Animation',\n    shortDescription: seo.shortDescription || '',\n    chapterTimestamps: seo.chapterTimestamps || '',\n    seoProvider: seoResp.provider || 'unknown',\n\n    // Pass through video info\n    videoPath: prevData.videoPath,\n    videoFilename: prevData.videoFilename,\n    videoDuration: prevData.videoDuration,\n    videoFileSize: prevData.videoFileSize,\n    videoFileSizeMB: prevData.videoFileSizeMB,\n    resolution: prevData.resolution,\n    subtitlesBurned: prevData.subtitlesBurned,\n\n    // Pass through thumbnail\n    thumbnail: prevData.thumbnail,\n\n    // Pass through metadata\n    metadata: prevData.metadata,\n\n    // Stats\n    assemblyStats: prevData.assemblyStats,\n    visualStats: prevData.visualStats,\n    audioStats: prevData.audioStats,\n\n    // Pipeline tracking\n    pipelineStartedAt: prevData.pipelineStartedAt,\n    scriptGeneratedAt: prevData.scriptGeneratedAt,\n    scenesPlannedAt: prevData.scenesPlannedAt,\n    visualsGeneratedAt: prevData.visualsGeneratedAt,\n    audioGeneratedAt: prevData.audioGeneratedAt,\n    videoAssembledAt: prevData.videoAssembledAt,\n    seoGeneratedAt: new Date().toISOString()\n  }\n}];\n"
+      },
+      "id": "a1956a22-5a1c-4462-95d8-6dea7780e0da",
+      "name": "Collect SEO Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        30752,
+        4368
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8001/api/generate-thumbnail",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ baseThumbnailPath: $json.thumbnail?.path || '', title: $json.youtubeTitle || '', episodeNumber: $json.metadata?.episodeNumber || 1, seriesName: $json.metadata?.seriesName || 'Captain Finn & Squeaky', includeTextOverlay: false, outputDir: '/data/thumbnails', outputFilename: 'thumbnail_final.png', jpegFallback: true }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "8176923c-065c-448d-b251-e9bc844a077d",
+      "name": "Generate Thumbnail",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        31024,
+        4368
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================\n// COLLECT THUMBNAIL RESULTS\n// Package thumbnail + all pipeline data for upload\n// ============================================\n\nconst thumbResp = $input.first().json;\nconst prevData = $('Collect SEO Results').first().json;\n\nreturn [{\n  json: {\n    // Thumbnail\n    thumbnailPath: thumbResp.path || '',\n    thumbnailJpegPath: thumbResp.jpegPath || '',\n    thumbnailFilename: thumbResp.filename || 'thumbnail_final.png',\n    thumbnailResolution: thumbResp.resolution || '1280x720',\n    thumbnailUsedFallback: thumbResp.usedFallbackBackground || false,\n\n    // SEO (from Node 7)\n    youtubeTitle: prevData.youtubeTitle,\n    youtubeDescription: prevData.youtubeDescription,\n    youtubeTags: prevData.youtubeTags,\n    youtubeCategory: prevData.youtubeCategory,\n    shortDescription: prevData.shortDescription,\n    chapterTimestamps: prevData.chapterTimestamps,\n\n    // Video (from Node 6)\n    videoPath: prevData.videoPath,\n    videoFilename: prevData.videoFilename,\n    videoDuration: prevData.videoDuration,\n    videoFileSize: prevData.videoFileSize,\n    videoFileSizeMB: prevData.videoFileSizeMB,\n    resolution: prevData.resolution,\n\n    // Metadata\n    metadata: prevData.metadata,\n\n    // Pipeline tracking\n    pipelineStartedAt: prevData.pipelineStartedAt,\n    scriptGeneratedAt: prevData.scriptGeneratedAt,\n    scenesPlannedAt: prevData.scenesPlannedAt,\n    visualsGeneratedAt: prevData.visualsGeneratedAt,\n    audioGeneratedAt: prevData.audioGeneratedAt,\n    videoAssembledAt: prevData.videoAssembledAt,\n    seoGeneratedAt: prevData.seoGeneratedAt,\n    thumbnailGeneratedAt: new Date().toISOString()\n  }\n}];\n"
+      },
+      "id": "3db17ea1-ab0c-4062-8279-4cfb64106718",
+      "name": "Collect Thumbnail Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        31312,
+        4368
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8001/api/upload-youtube",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ videoPath: $json.videoPath, title: $json.youtubeTitle || 'Untitled Episode', description: $json.youtubeDescription || '', tags: $json.youtubeTags || [], category: $json.youtubeCategory || 'Film & Animation', thumbnailPath: $json.thumbnailPath || '', privacyStatus: 'private', madeForKids: true, defaultLanguage: 'en', defaultAudioLanguage: 'en' }) }}",
+        "options": {
+          "timeout": 1800000
+        }
+      },
+      "id": "7c13f7b0-d073-4d00-89ba-7ddff7b75fc9",
+      "name": "Upload to YouTube",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        31584,
+        4368
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================\n// PIPELINE COMPLETE\n// Final summary of the entire pipeline run\n// ============================================\n\nconst upload = $input.first().json;\nconst prevData = $('Collect Thumbnail Results').first().json;\n\nreturn [{\n  json: {\n    // Upload result\n    videoId: upload.videoId || '',\n    videoUrl: upload.videoUrl || '',\n    uploadSuccess: upload.success || false,\n    privacyStatus: upload.privacyStatus || 'private',\n    thumbnailUploaded: upload.thumbnailUploaded || false,\n\n    // SEO used\n    youtubeTitle: prevData.youtubeTitle,\n    youtubeCategory: prevData.youtubeCategory,\n    tagCount: (prevData.youtubeTags || []).length,\n\n    // Video info\n    videoFilename: prevData.videoFilename,\n    videoDuration: prevData.videoDuration,\n    videoFileSizeMB: prevData.videoFileSizeMB,\n    resolution: prevData.resolution,\n\n    // Episode info\n    episodeNumber: prevData.metadata?.episodeNumber || 1,\n    seriesName: prevData.metadata?.seriesName || '',\n    storyTitle: prevData.metadata?.storyTitle || '',\n\n    // Pipeline timing\n    pipelineStartedAt: prevData.pipelineStartedAt,\n    scriptGeneratedAt: prevData.scriptGeneratedAt,\n    scenesPlannedAt: prevData.scenesPlannedAt,\n    visualsGeneratedAt: prevData.visualsGeneratedAt,\n    audioGeneratedAt: prevData.audioGeneratedAt,\n    videoAssembledAt: prevData.videoAssembledAt,\n    seoGeneratedAt: prevData.seoGeneratedAt,\n    thumbnailGeneratedAt: prevData.thumbnailGeneratedAt,\n    uploadedAt: upload.uploadedAt || new Date().toISOString(),\n    pipelineCompletedAt: new Date().toISOString()\n  }\n}];\n"
+      },
+      "id": "3e6e8a87-bd58-4d3c-bc4d-48ab66987f93",
+      "name": "Pipeline Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        31872,
+        4368
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8001/api/generate-visuals",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ imageSource: 'manual', manualImageDir: '/data/images/manual', imageTasks: $json.imageTasks, animationTasks: $json.animationTasks, scenes: $json.scenes, thumbnailTask: $json.thumbnailTask, checkpoint: $json.settings.checkpoint, motionModule: $json.settings.motionModule, sampler: $json.settings.sampler, scheduler: 'normal', imageDir: $json.directories.images, clipDir: $json.directories.clips, kenBurnsEnabled: true, videoWidth: 1920, videoHeight: 1080, fps: 12, animateFrames: 16 }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 3600000
+        }
+      },
+      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "name": "Generate All Visuals",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        28400,
+        4368
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8001/api/lip-sync",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ scenes: $json.scenes, imageDir: ($json.directories || {}).images || '/data/images', audioDir: ($json.directories || {}).audio || '/data/audio', clipDir: ($json.directories || {}).clips || '/data/clips', stillMode: true, expressionScale: 1.0 }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 1800000
+        }
+      },
+      "id": "b2c3d4e5-f6a7-8901-bcde-f23456789012",
+      "name": "Apply Lip Sync",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        29900,
+        4368
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Daily Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Story Ideas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Story Ideas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Story Ideas": {
+      "main": [
+        [
+          {
+            "node": "Pick Best Story",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Best Story": {
+      "main": [
+        [
+          {
+            "node": "Prepare Story Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Story Context": {
+      "main": [
+        [
+          {
+            "node": "Generate Script (LLM)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Script (LLM)": {
+      "main": [
+        [
+          {
+            "node": "Structure Script Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structure Script Output": {
+      "main": [
+        [
+          {
+            "node": "Plan Scenes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan Scenes": {
+      "main": [
+        [
+          {
+            "node": "Collect Scene Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Scene Plan": {
+      "main": [
+        [
+          {
+            "node": "Generate All Visuals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate All Visuals": {
+      "main": [
+        [
+          {
+            "node": "Collect Visual Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Visual Results": {
+      "main": [
+        [
+          {
+            "node": "Generate Audio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Audio": {
+      "main": [
+        [
+          {
+            "node": "Collect Audio Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Audio Results": {
+      "main": [
+        [
+          {
+            "node": "Apply Lip Sync",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Lip Sync": {
+      "main": [
+        [
+          {
+            "node": "Assemble Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble Video": {
+      "main": [
+        [
+          {
+            "node": "Collect Assembly Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Assembly Results": {
+      "main": [
+        [
+          {
+            "node": "Generate SEO",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate SEO": {
+      "main": [
+        [
+          {
+            "node": "Collect SEO Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect SEO Results": {
+      "main": [
+        [
+          {
+            "node": "Generate Thumbnail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Thumbnail": {
+      "main": [
+        [
+          {
+            "node": "Collect Thumbnail Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Thumbnail Results": {
+      "main": [
+        [
+          {
+            "node": "Upload to YouTube",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to YouTube": {
+      "main": [
+        [
+          {
+            "node": "Pipeline Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "65aed6af-a679-4a36-bfad-982d578dde79",
+  "meta": {
+    "instanceId": "6373c78df486084a543109c3041a95d5f88a1971011a9d9665f60e1b5cadb43f"
+  },
+  "id": "xrhbaPC0e1jZwpPk",
+  "tags": []
+}
