@@ -100,7 +100,7 @@
         "url": "http://api:8001/api/generate-script",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ storyTitle: $json.storyTitle, storyPremise: $json.storyPremise, storyGenre: $json.storyGenre, storyThemes: $json.storyThemes, storyMood: $json.storyMood, characters: $json.characters, characterDescriptions: $json.characterDescriptions, characterIds: $json.characterIds, seriesName: $json.seriesName, seriesStyle: $json.seriesStyle, seriesGenre: $json.seriesGenre, checkpoint: $json.checkpoint, negativePrompt: $json.negativePrompt, episodeNumber: $json.episodeNumber, targetDuration: 2, pacingMode: 'retention', provider: 'auto' }) }}",
+        "jsonBody": "={{ JSON.stringify({ storyTitle: $json.storyTitle, storyPremise: $json.storyPremise, storyGenre: $json.storyGenre, storyThemes: $json.storyThemes, storyMood: $json.storyMood, characters: $json.characters, characterDescriptions: $json.characterDescriptions, characterIds: $json.characterIds, seriesName: $json.seriesName, seriesStyle: $json.seriesStyle, seriesGenre: $json.seriesGenre, checkpoint: $json.checkpoint, negativePrompt: $json.negativePrompt, episodeNumber: $json.episodeNumber, targetDuration: 2, pacingMode: 'retention', narrationOnly: true, provider: 'auto' }) }}",
         "options": {
           "response": {
             "response": {
@@ -138,7 +138,7 @@
         "url": "http://api:8001/api/plan-scenes",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ title: $json.title, description: $json.description, tags: $json.tags, scenes: $json.scenes, fullNarration: $json.fullNarration, thumbnailDescription: $json.thumbnailDescription, cliffhanger: $json.cliffhanger, totalScenes: $json.totalScenes, estimatedDuration: $json.estimatedDuration, seriesName: $json.seriesName, seriesStyle: $json.seriesStyle, checkpoint: $json.checkpoint, negativePrompt: $json.negativePrompt, episodeNumber: $json.episodeNumber, characters: $json.characters, characterIds: $json.characterIds, imageWidth: 512, imageHeight: 384, animateFrames: 16, animateSteps: 15, imageSteps: 20, imageCfg: 7.0, animateCfg: 6.5, motionModule: 'v3_sd15_mm.ckpt', sampler: 'euler_ancestral', scheduler: 'normal', imageDir: '/data/images', clipDir: '/data/clips', audioDir: '/data/audio', videoDir: '/data/video', narratorVoice: 'en-GB-RyanNeural', ttsRate: '-5%', ttsPitch: '+0Hz', videoWidth: 1920, videoHeight: 1080, fps: 12, wordsPerMinute: 160 }) }}",
+        "jsonBody": "={{ JSON.stringify({ title: $json.title, description: $json.description, tags: $json.tags, scenes: $json.scenes, fullNarration: $json.fullNarration, thumbnailDescription: $json.thumbnailDescription, cliffhanger: $json.cliffhanger, totalScenes: $json.totalScenes, estimatedDuration: $json.estimatedDuration, seriesName: $json.seriesName, seriesStyle: $json.seriesStyle, checkpoint: $json.checkpoint, negativePrompt: $json.negativePrompt, episodeNumber: $json.episodeNumber, characters: $json.characters, characterIds: $json.characterIds, imageWidth: 1024, imageHeight: 576, animateFrames: 16, animateSteps: 15, imageSteps: 20, imageCfg: 7.0, animateCfg: 6.5, motionModule: 'v3_sd15_mm.ckpt', sampler: 'euler_ancestral', scheduler: 'normal', imageDir: '/data/images', clipDir: '/data/clips', audioDir: '/data/audio', videoDir: '/data/video', narratorVoice: 'en-GB-RyanNeural', ttsRate: '-5%', ttsPitch: '+0Hz', videoWidth: 1920, videoHeight: 1080, fps: 12, wordsPerMinute: 170, pacingMode: 'retention' }) }}",
         "options": {
           "response": {
             "response": {
@@ -227,7 +227,7 @@
         "url": "http://api:8001/api/assemble-video",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ (() => { const base = $('Collect Audio Results').first().json || {}; const current = $json || {}; const metadata = base.metadata || current.metadata || {}; const directories = base.directories || current.directories || {}; return JSON.stringify({ scenes: current.scenes || base.scenes || [], syncMap: base.syncMap || current.syncMap || {}, fullVideoSubtitle: base.fullVideoSubtitle || current.fullVideoSubtitle || {}, metadata, settings: base.settings || current.settings || {}, directories, outputFilename: 'episode_' + (metadata.episodeNumber || 1) + '.mp4', videoDir: directories.video || '/data/video', width: 1080, height: 1920, fps: 24, fadeInDuration: 0.3, fadeOutDuration: 0.3, interSceneGap: 0.3, burnSubtitles: false, maxAssemblySeconds: 1800, colorEnhance: true }); })() }}",
+        "jsonBody": "={{ (() => { const base = $('Collect Audio Results').first().json || {}; const current = $json || {}; const metadata = base.metadata || current.metadata || {}; const directories = base.directories || current.directories || {}; return JSON.stringify({ scenes: current.scenes || base.scenes || [], syncMap: base.syncMap || current.syncMap || {}, fullVideoSubtitle: base.fullVideoSubtitle || current.fullVideoSubtitle || {}, metadata, settings: base.settings || current.settings || {}, directories, outputFilename: 'episode_' + (metadata.episodeNumber || 1) + '.mp4', videoDir: directories.video || '/data/video', width: 1920, height: 1080, fps: 24, fadeInDuration: 0.3, fadeOutDuration: 0.3, interSceneGap: 0.3, burnSubtitles: false, maxAssemblySeconds: 1800, colorEnhance: true }); })() }}",
         "options": {
           "response": {
             "response": {
@@ -248,7 +248,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// ============================================\n// COLLECT ASSEMBLY RESULTS\n// Package final video info for upload/SEO nodes\n// ============================================\n\nconst assembly = $input.first().json;\nconst prevData = $('Collect Audio Results').first().json;\n\nreturn [{\n  json: {\n    // Final video\n    videoPath: assembly.outputPath || '',\n    videoFilename: assembly.outputFilename || '',\n    videoDuration: assembly.duration || 0,\n    videoFileSize: assembly.fileSize || 0,\n    videoFileSizeMB: assembly.fileSizeMB || 0,\n    resolution: assembly.resolution || '1080x1920',\n    subtitlesBurned: assembly.subtitlesBurned || false,\n\n    // Thumbnail (from Node 4)\n    thumbnail: prevData.thumbnail || null,\n\n    // Metadata for upload\n    metadata: prevData.metadata || {},\n\n    // Assembly stats\n    assemblyStats: {\n      scenesAssembled: assembly.scenesAssembled || 0,\n      totalScenes: assembly.totalScenes || 0,\n      elapsedSeconds: assembly.elapsedSeconds || 0,\n      clipDetails: assembly.clipDetails || []\n    },\n    visualStats: prevData.visualStats || {},\n    audioStats: prevData.audioStats || {},\n\n    // Pipeline tracking\n    pipelineStartedAt: prevData.pipelineStartedAt,\n    scriptGeneratedAt: prevData.scriptGeneratedAt,\n    scenesPlannedAt: prevData.scenesPlannedAt,\n    visualsGeneratedAt: prevData.visualsGeneratedAt,\n    audioGeneratedAt: prevData.audioGeneratedAt,\n    videoAssembledAt: new Date().toISOString()\n  }\n}];\n"
+        "jsCode": "// ============================================\n// COLLECT ASSEMBLY RESULTS\n// Package final video info for upload/SEO nodes\n// ============================================\n\nconst assembly = $input.first().json;\nconst prevData = $('Collect Audio Results').first().json;\n\nreturn [{\n  json: {\n    // Final video\n    videoPath: assembly.outputPath || '',\n    videoFilename: assembly.outputFilename || '',\n    videoDuration: assembly.duration || 0,\n    videoFileSize: assembly.fileSize || 0,\n    videoFileSizeMB: assembly.fileSizeMB || 0,\n    resolution: assembly.resolution || '1920x1080',\n    subtitlesBurned: assembly.subtitlesBurned || false,\n\n    // Pass scenes through for quality validation\n    scenes: prevData.scenes || [],\n    fullVideoSubtitle: prevData.fullVideoSubtitle || {},\n    directories: prevData.directories || {},\n\n    // Thumbnail (from Node 4)\n    thumbnail: prevData.thumbnail || null,\n\n    // Metadata for upload\n    metadata: prevData.metadata || {},\n\n    // Assembly stats\n    assemblyStats: {\n      scenesAssembled: assembly.scenesAssembled || 0,\n      totalScenes: assembly.totalScenes || 0,\n      elapsedSeconds: assembly.elapsedSeconds || 0,\n      clipDetails: assembly.clipDetails || []\n    },\n    visualStats: prevData.visualStats || {},\n    audioStats: prevData.audioStats || {},\n\n    // Pipeline tracking\n    pipelineStartedAt: prevData.pipelineStartedAt,\n    scriptGeneratedAt: prevData.scriptGeneratedAt,\n    scenesPlannedAt: prevData.scenesPlannedAt,\n    visualsGeneratedAt: prevData.visualsGeneratedAt,\n    audioGeneratedAt: prevData.audioGeneratedAt,\n    videoAssembledAt: new Date().toISOString()\n  }\n}];\n"
       },
       "id": "20f5779b-cb32-4f8b-9e04-ee4e94ccee91",
       "name": "Collect Assembly Results",
@@ -323,6 +323,44 @@
       "position": [
         31312,
         4368
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8001/api/validate-video",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ (() => { const base = $('Collect Assembly Results').first().json || {}; return JSON.stringify({ videoPath: base.videoPath || '', imageDir: '/data/images', audioDir: '/data/audio', clipDir: '/data/clips', subtitlePath: (base.fullVideoSubtitle || {}).path || '', scenes: base.scenes || [], expectedSceneCount: ((base.assemblyStats || {}).totalScenes || (base.scenes || []).length || 0), minQualityScore: 0.78 }); })() }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 120000
+        }
+      },
+      "id": "d1e2f3a4-b5c6-47d8-9012-34567890abcd",
+      "name": "Validate Video Quality",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        30464,
+        4560
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================\n// ENFORCE QUALITY GATE\n// Block weak episodes before SEO/upload\n// ============================================\n\nconst validation = $input.first().json || {};\nconst base = $('Collect Assembly Results').first().json || {};\n\nif (!validation.success || !validation.passed) {\n  const score = validation.qualityScore ?? 0;\n  const threshold = validation.threshold ?? 0.78;\n  const rec = validation.recommendation || 'Quality gate failed';\n  throw new Error(`Quality gate blocked publish: score ${score} < ${threshold}. ${rec}`);\n}\n\nreturn [{\n  json: {\n    ...base,\n    qualityValidation: {\n      passed: validation.passed,\n      qualityScore: validation.qualityScore,\n      threshold: validation.threshold,\n      failedScenes: validation.failedScenes || [],\n      recommendation: validation.recommendation || ''\n    }\n  }\n}];\n"
+      },
+      "id": "e2f3a4b5-c6d7-4890-1234-567890abcdef",
+      "name": "Enforce Quality Gate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        30752,
+        4560
       ]
     },
     {
@@ -547,7 +585,7 @@
       "main": [
         [
           {
-            "node": "Apply Lip Sync",
+            "node": "Assemble Video",
             "type": "main",
             "index": 0
           }
@@ -577,6 +615,28 @@
       ]
     },
     "Collect Assembly Results": {
+      "main": [
+        [
+          {
+            "node": "Validate Video Quality",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Video Quality": {
+      "main": [
+        [
+          {
+            "node": "Enforce Quality Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enforce Quality Gate": {
       "main": [
         [
           {

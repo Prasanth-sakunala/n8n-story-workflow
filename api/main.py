@@ -399,10 +399,7 @@ def _init_data_dirs():
     ]:
         os.makedirs(dst_dir, exist_ok=True)
         if not os.path.exists(dst_file) and os.path.exists(src):
-            with open(src, "r", encoding="utf-8") as f:
-                content = f.read()
-            with open(dst_file, "w", encoding="utf-8") as f:
-                f.write(content)
+            "dialogue": [],
 
     # Ensure other dirs exist
     for d in ["images", "audio", "video", "credentials", "clips",
@@ -1664,28 +1661,22 @@ SCENE STRUCTURE FOR A {target_duration}-MINUTE EPISODE:
 - ENDING + HOOK (1 scene): Wrap up warmly, then tease something for the next episode.
   End with: "But that is a story for another day..." or similar cliffhanger.
 
-Each scene is 12-18 seconds long. Total narration + dialogue should be {word_count} words.
+Each scene is 6-12 seconds long. Total narration should be {word_count} words.
 Every scene is SEPARATE (has its own narration, visuals, and emotions).
 
 NARRATION RULES:
 - Narrator speaks in third person, like a warm storybook: "Captain Finn looked up at the sky..."
 - Use SIMPLE words a 5-year-old understands. No complex vocabulary.
-- Each scene has 2-4 vivid sentences of narration (25-45 words per scene).
+- Each scene has 2-3 vivid sentences of narration (18-32 words per scene).
 - Use sensory language: sounds, colors, textures, temperatures.
 - Build atmosphere — describe what characters see, hear, and feel.
 - Show emotions through actions: "His heart raced" not "He felt anxious"
 - Pause between dramatic moments (use "..." in narration).
-- Character dialogue is separate from narration — characters speak in first person.
+- This episode is narration-only. Do not write spoken character dialogue.
 
 DIALOGUE RULES:
-- Each character has a PERMANENT distinct voice (never swap or change):
-  * Finn: brave, warm, encouraging. Short confident sentences.
-  * Squeaky: fast-talking, clever, excited. Questions and exclamations.
-  * Misty: sarcastic first, then helpful. Dry humor, smart observations.
-- Keep lines short (under 12 words each). Kids must follow easily.
-- Use character catchphrases naturally (not forced).
-- 2-4 dialogue exchanges per scene. Dialogue should reveal character, conflict, or a joke.
-- Misty often disagrees first, then helps. Squeaky explains things. Finn encourages.
+- Keep dialogue as an empty array for every scene.
+- If reactions are needed, express them via narrator text only.
 
 VISUAL DESCRIPTION RULES:
 - Describe exactly what the camera sees, like a storyboard artist.
@@ -1717,8 +1708,8 @@ def _build_script_prompt(data: dict) -> str:
     if pacing_mode == "retention":
         # Retention-optimized: fewer scenes, faster cuts, tighter story
         target_min = min(target_min, 2)  # Cap at 2 minutes
-        scene_count = max(8, min(12, int(target_min * 5)))  # tighter cuts, less stretching
-        word_count = f"{target_min * 80}-{target_min * 100}"
+        scene_count = max(10, min(14, int(target_min * 6)))
+        word_count = f"{target_min * 90}-{target_min * 120}"
     else:
         # Standard pacing
         scene_count = max(10, min(20, int(target_min * 2)))
@@ -2138,6 +2129,7 @@ class GenerateScriptRequest(BaseModel):
     # Generation settings
     targetDuration: int = 3  # minutes (SECTION 3: optimized for retention)
     pacingMode: str = "retention"  # "retention" (2-4 min, fast pace) | "standard" (5-8 min)
+    narrationOnly: bool = True
     provider: str = "auto"   # auto | gemini | groq | ollama
     geminiModel: str = "gemini-2.5-flash"
     groqModel: str = "meta-llama/llama-4-scout-17b-16e-instruct"
@@ -2249,14 +2241,45 @@ def _validate_script(script: dict, context: dict) -> dict:
     if not isinstance(scenes, list):
         scenes = []
 
+    pacing_mode = str(context.get("pacingMode", "retention")).lower()
+    retention_mode = pacing_mode == "retention"
+    min_scenes = 8 if retention_mode else 10
+    max_scenes = 14 if retention_mode else 20
+    wpm = 170 if retention_mode else 150
+    min_scene_sec = 6.0 if retention_mode else 7.0
+    max_scene_sec = 10.0 if retention_mode else 16.0
+    pause_sec = 0.8 if retention_mode else 1.0
+
+    def _scene_duration_from_text(text: str) -> float:
+        words = len((text or "").split())
+        if words <= 0:
+            return min_scene_sec
+        estimate = (words / wpm) * 60 + pause_sec
+        return round(max(min_scene_sec, min(max_scene_sec, estimate)), 2)
+
+    def _norm_text(text: str) -> str:
+        t = re.sub(r"[^a-z0-9\s]", " ", (text or "").lower())
+        return re.sub(r"\s+", " ", t).strip()
+
+    def _jaccard_similarity(a: str, b: str) -> float:
+        sa = set(_norm_text(a).split())
+        sb = set(_norm_text(b).split())
+        if not sa and not sb:
+            return 1.0
+        if not sa or not sb:
+            return 0.0
+        return len(sa & sb) / max(1, len(sa | sb))
+
     validated_scenes = []
-    for i, scene in enumerate(scenes):
+    for i, scene in enumerate(scenes[:max_scenes]):
         if not isinstance(scene, dict):
             continue
+        narration_text = str(scene.get("narration", ""))[:600]
         validated_scenes.append({
             "sceneNumber": i + 1,
-            "narration": str(scene.get("narration", ""))[:600],
-            "dialogue": scene.get("dialogue", []) if isinstance(scene.get("dialogue"), list) else [],
+            "narration": narration_text,
+            # Narration-only pipeline: keep all spoken content in narrator track.
+            "dialogue": [],
             "visualDescription": str(scene.get("visualDescription", ""))[:400],
             "charactersInScene": scene.get("charactersInScene", []) if isinstance(scene.get("charactersInScene"), list) else [],
             "emotion": str(scene.get("emotion", "neutral"))[:30],
@@ -2264,19 +2287,19 @@ def _validate_script(script: dict, context: dict) -> dict:
             "location": str(scene.get("location", ""))[:100],
             # Keep generated scenes text-free; subtitles stay in files, not in the artwork.
             "textOverlay": "",
-            "duration": min(15, max(4, float(scene.get("duration", 8)))),
+            "duration": _scene_duration_from_text(narration_text),
         })
 
-    # Pad with filler scenes if too few
-    if len(validated_scenes) < 5:
+    # If the LLM returns too few scenes, add short non-repetitive bridge scenes.
+    if len(validated_scenes) < min_scenes:
         defaults = [
-            {"narration": f"And so the adventure began for our heroes in {context.get('storyTitle', 'this tale')}.", "emotion": "excited", "cameraAngle": "wide_shot"},
-            {"narration": "They looked at each other, knowing this would not be easy. But together, they could face anything.", "emotion": "determined", "cameraAngle": "medium_shot"},
-            {"narration": "Something unexpected caught their eye. What could it be?", "emotion": "curious", "cameraAngle": "close_up"},
-            {"narration": "With a burst of courage, they pushed forward into the unknown.", "emotion": "brave", "cameraAngle": "low_angle"},
-            {"narration": "And just like that, the day was saved. But something told them... this was only the beginning.", "emotion": "hopeful", "cameraAngle": "wide_shot"},
+            {"narration": f"A strange clue appeared in {context.get('storyTitle', 'the adventure')}, and the team rushed to understand it.", "emotion": "curious", "cameraAngle": "wide_shot"},
+            {"narration": "A small mistake made the challenge harder, but the heroes adapted quickly.", "emotion": "determined", "cameraAngle": "medium_shot"},
+            {"narration": "They noticed a hidden detail others would miss, and everything started to make sense.", "emotion": "surprised", "cameraAngle": "close_up"},
+            {"narration": "One risky move changed the momentum, and hope returned.", "emotion": "excited", "cameraAngle": "low_angle"},
+            {"narration": "The path ahead was still unknown, but they moved forward together.", "emotion": "warm", "cameraAngle": "wide_shot"},
         ]
-        while len(validated_scenes) < 5:
+        while len(validated_scenes) < min_scenes:
             idx = len(validated_scenes)
             d = defaults[idx % len(defaults)]
             validated_scenes.append({
@@ -2289,8 +2312,31 @@ def _validate_script(script: dict, context: dict) -> dict:
                 "cameraAngle": d["cameraAngle"],
                 "location": "unknown",
                 "textOverlay": "",
-                "duration": 8,
+                "duration": _scene_duration_from_text(d["narration"]),
             })
+
+    # Engagement normalization: enforce a stronger opener + de-duplicate near-repeated narration.
+    if validated_scenes:
+        first = validated_scenes[0].get("narration", "")
+        first_norm = _norm_text(first)
+        hook_tokens = ("suddenly", "alarm", "mystery", "before", "warning", "vanish", "secret", "storm")
+        if not any(tok in first_norm for tok in hook_tokens):
+            validated_scenes[0]["narration"] = f"Suddenly, a new mystery burst open. {first}".strip()
+            validated_scenes[0]["duration"] = _scene_duration_from_text(validated_scenes[0]["narration"])
+
+    bridge_variants = [
+        "A fresh clue changed their direction, and the tension rose.",
+        "The plan shifted quickly as a hidden detail came into focus.",
+        "For one breath, everything paused, then the adventure surged ahead.",
+        "A new obstacle appeared, forcing a smarter move than before.",
+    ]
+    for i in range(1, len(validated_scenes)):
+        cur = validated_scenes[i].get("narration", "")
+        prev = validated_scenes[i - 1].get("narration", "")
+        if _jaccard_similarity(cur, prev) > 0.82:
+            replacement = bridge_variants[(i - 1) % len(bridge_variants)]
+            validated_scenes[i]["narration"] = replacement
+            validated_scenes[i]["duration"] = _scene_duration_from_text(replacement)
 
     script["scenes"] = validated_scenes
     script["totalScenes"] = len(validated_scenes)
@@ -2375,16 +2421,22 @@ class PlanScenesRequest(BaseModel):
     fps: int = 12  # CHANGED from 24 to reduce processing load (FIX 6)
     # Words-per-minute for duration estimation
     wordsPerMinute: int = 150
+    pacingMode: str = "retention"
 
 
-def _estimate_duration(text: str, wpm: int) -> float:
+def _estimate_duration(
+    text: str,
+    wpm: int,
+    min_seconds: float = 5.0,
+    max_seconds: float = 14.0,
+    pause_seconds: float = 1.0,
+) -> float:
     """Estimate speech duration in seconds from text and WPM."""
     if not text:
-        return 6.0
+        return min_seconds
     words = len(text.split())
     dur = (words / wpm) * 60
-    # Allow up to 25s per scene for proper 5-8 min videos
-    return max(5.0, min(25.0, round(dur + 1.5, 2)))  # +1.5s for pauses/pacing
+    return max(min_seconds, min(max_seconds, round(dur + pause_seconds, 2)))
 
 
 # STEP 1: New structured prompt function using CANONICAL CONSISTENCY SYSTEM
@@ -2545,25 +2597,7 @@ def _build_audio_tasks(scene: dict, characters: dict, narrator_voice: str) -> li
             "filename": f"scene_{sn:02d}_narration.m4a",
         })
 
-    # Character dialogue lines — voice resolved via lock system
-    for i, dial in enumerate(scene.get("dialogue", [])):
-        if not isinstance(dial, dict):
-            continue
-        char_name = dial.get("character", "")
-        line = dial.get("line", "")
-        if not line:
-            continue
-
-        # Use voice lock system (single source of truth for voice identity)
-        voice = _resolve_voice(char_name, narrator_voice)
-
-        tasks.append({
-            "type": "dialogue",
-            "character": char_name,
-            "text": line,
-            "voice": voice,
-            "filename": f"scene_{sn:02d}_dial_{i:02d}.m4a",
-        })
+    # Narration-only pipeline: dialogue TTS is intentionally disabled.
 
     return tasks
 
@@ -2596,12 +2630,12 @@ def plan_scenes(req: PlanScenesRequest):
         dialogue = scene.get("dialogue", [])
 
         # --- Duration estimation ---
-        # Combine narration + dialogue word counts
+        # Narration-only pacing with tighter per-scene caps in retention mode.
         all_text = narration
-        for d in dialogue:
-            if isinstance(d, dict):
-                all_text += " " + d.get("line", "")
-        duration = _estimate_duration(all_text, req.wordsPerMinute)
+        if str(req.pacingMode).lower() == "retention":
+            duration = _estimate_duration(all_text, req.wordsPerMinute, min_seconds=6.0, max_seconds=10.0, pause_seconds=0.8)
+        else:
+            duration = _estimate_duration(all_text, req.wordsPerMinute, min_seconds=7.0, max_seconds=16.0, pause_seconds=1.0)
         total_estimated_dur += duration
 
         # --- Image generation task ---
@@ -3495,7 +3529,7 @@ def _ken_burns_fallback(
 
     # Scale up source image first for zoompan headroom
     scale_w, scale_h = width * 2, height * 2
-    vf = f"scale={scale_w}:{scale_h}:flags=lanczos:force_original_aspect_ratio=decrease,pad={scale_w}:{scale_h}:(ow-iw)/2:(oh-ih)/2:color=black,{zp}"
+    vf = f"scale={scale_w}:{scale_h}:flags=lanczos:force_original_aspect_ratio=increase,crop={scale_w}:{scale_h},{zp}"
 
     try:
         r = subprocess.run(
@@ -3562,7 +3596,7 @@ def _parallax_motion(
     
     scale_w, scale_h = width * 2, height * 2
     zp = f"zoompan=z='min({z_start}+({z_end}-{z_start})*on/{total_frames},{z_end})':d={total_frames}:x='{x_expr}':y='{y_expr}':s={width}x{height}:fps={fps}"
-    vf = f"scale={scale_w}:{scale_h}:flags=lanczos:force_original_aspect_ratio=decrease,pad={scale_w}:{scale_h}:(ow-iw)/2:(oh-ih)/2:color=black,{zp}"
+    vf = f"scale={scale_w}:{scale_h}:flags=lanczos:force_original_aspect_ratio=increase,crop={scale_w}:{scale_h},{zp}"
 
     try:
         r = subprocess.run(
@@ -3608,7 +3642,7 @@ def _cinematic_drift(
         amp = 0.04
         zp = f"zoompan=z='{mid}+{amp}*sin(on*3.14159/{total_frames})':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={width}x{height}:fps={fps}"
 
-    vf = f"scale={scale_w}:{scale_h}:flags=lanczos:force_original_aspect_ratio=decrease,pad={scale_w}:{scale_h}:(ow-iw)/2:(oh-ih)/2:color=black,{zp}"
+    vf = f"scale={scale_w}:{scale_h}:flags=lanczos:force_original_aspect_ratio=increase,crop={scale_w}:{scale_h},{zp}"
 
     try:
         r = subprocess.run(
@@ -5673,8 +5707,8 @@ def _prepare_scene_clip(
         if lipsync_dur > 0:
             if lipsync_dur >= target_dur * 0.8:
                 # Lip sync covers most of the scene — use it directly
-                vf = (f"scale={width}:{height}:flags=lanczos:force_original_aspect_ratio=decrease,"
-                      f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,"
+                    vf = (f"scale={width}:{height}:flags=lanczos:force_original_aspect_ratio=increase,"
+                        f"crop={width}:{height},"
                       f"fps={fps},"
                       f"fade=t=in:st=0:d={fade_in},"
                       f"fade=t=out:st={max(0, target_dur - fade_out)}:d={fade_out}")
@@ -5698,12 +5732,12 @@ def _prepare_scene_clip(
                 if kb_source and os.path.exists(kb_source):
                     part_a = os.path.join(video_dir, f"scene_{sn:02d}_ls_scaled.mp4")
                     part_b = os.path.join(video_dir, f"scene_{sn:02d}_ls_kb.mp4")
-                    vf_a = (f"scale={width}:{height}:flags=lanczos:force_original_aspect_ratio=decrease,"
-                            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,fps={fps}")
+                        vf_a = (f"scale={width}:{height}:flags=lanczos:force_original_aspect_ratio=increase,"
+                            f"crop={width}:{height},fps={fps}")
                     total_frames_b = int((remaining + 1.5) * fps)
                     scale_w, scale_h = width * 2, height * 2
-                    vf_b = (f"scale={scale_w}:{scale_h}:flags=lanczos:force_original_aspect_ratio=decrease,"
-                            f"pad={scale_w}:{scale_h}:(ow-iw)/2:(oh-ih)/2:color=black,"
+                        vf_b = (f"scale={scale_w}:{scale_h}:flags=lanczos:force_original_aspect_ratio=increase,"
+                            f"crop={scale_w}:{scale_h},"
                             f"zoompan=z='min(1.0+(0.2)*on/{total_frames_b},1.2)':"
                             f"d={total_frames_b}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
                             f"s={width}x{height}:fps={fps}")
@@ -5762,8 +5796,8 @@ def _prepare_scene_clip(
             # Part A: loop the AnimateDiff clip
             part_a = os.path.join(video_dir, f"scene_{sn:02d}_partA.mp4")
             loop_count = int(split_a / clip_dur) + 2
-            vf_a = (f"scale={width}:{height}:flags=lanczos:force_original_aspect_ratio=decrease,"
-                    f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,"
+                vf_a = (f"scale={width}:{height}:flags=lanczos:force_original_aspect_ratio=increase,"
+                    f"crop={width}:{height},"
                     f"minterpolate=fps={fps}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir")
             try:
                 subprocess.run(
@@ -5780,8 +5814,8 @@ def _prepare_scene_clip(
             part_b = os.path.join(video_dir, f"scene_{sn:02d}_partB.mp4")
             total_frames_b = int((split_b + crossfade_dur) * fps)
             scale_w, scale_h = width * 2, height * 2
-            vf_b = (f"scale={scale_w}:{scale_h}:flags=lanczos:force_original_aspect_ratio=decrease,"
-                    f"pad={scale_w}:{scale_h}:(ow-iw)/2:(oh-ih)/2:color=black,"
+                vf_b = (f"scale={scale_w}:{scale_h}:flags=lanczos:force_original_aspect_ratio=increase,"
+                    f"crop={scale_w}:{scale_h},"
                     f"zoompan=z='min(1.0+(0.2)*on/{total_frames_b},1.2)':"
                     f"d={total_frames_b}:x='(iw-iw/zoom)*on/{total_frames_b}':"
                     f"y='ih/2-(ih/zoom/2)':s={width}x{height}:fps={fps}")
@@ -5827,8 +5861,8 @@ def _prepare_scene_clip(
 
         # ── Strategy B: Just loop the animated clip (no second keyframe) ──
         vf_parts = [
-            f"scale={width}:{height}:flags=lanczos:force_original_aspect_ratio=decrease",
-            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black",
+            f"scale={width}:{height}:flags=lanczos:force_original_aspect_ratio=increase",
+            f"crop={width}:{height}",
         ]
 
         speed_ratio = clip_dur / target_dur
@@ -5864,8 +5898,8 @@ def _prepare_scene_clip(
                         "duration": target_dur, "method": "animated"}
             # Fallback without minterpolate if it fails
             vf_simple = ",".join([
-                f"scale={width}:{height}:flags=lanczos:force_original_aspect_ratio=decrease",
-                f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black",
+                f"scale={width}:{height}:flags=lanczos:force_original_aspect_ratio=increase",
+                f"crop={width}:{height}",
                 f"fps={fps}",
                 f"fade=t=in:st=0:d={fade_in}",
                 f"fade=t=out:st={max(0, target_dur - fade_out)}:d={fade_out}",
@@ -5894,14 +5928,14 @@ def _prepare_scene_clip(
         part_b = os.path.join(video_dir, f"scene_{sn:02d}_kbB.mp4")
 
         # Part A: zoom in on first keyframe
-        vf_a = (f"scale={scale_w}:{scale_h}:flags=lanczos:force_original_aspect_ratio=decrease,"
-                f"pad={scale_w}:{scale_h}:(ow-iw)/2:(oh-ih)/2:color=black,"
+        vf_a = (f"scale={scale_w}:{scale_h}:flags=lanczos:force_original_aspect_ratio=increase,"
+            f"crop={scale_w}:{scale_h},"
                 f"zoompan=z='min(1.0+(0.2)*on/{total_frames_half},1.2)':"
                 f"d={total_frames_half}:x='iw/2-(iw/zoom/2)':"
                 f"y='ih/2-(ih/zoom/2)':s={width}x{height}:fps={fps}")
         # Part B: pan on second keyframe
-        vf_b = (f"scale={scale_w}:{scale_h}:flags=lanczos:force_original_aspect_ratio=decrease,"
-                f"pad={scale_w}:{scale_h}:(ow-iw)/2:(oh-ih)/2:color=black,"
+        vf_b = (f"scale={scale_w}:{scale_h}:flags=lanczos:force_original_aspect_ratio=increase,"
+            f"crop={scale_w}:{scale_h},"
                 f"zoompan=z='1.15':d={total_frames_half}:"
                 f"x='(iw-iw/zoom)*on/{total_frames_half}':"
                 f"y='ih/2-(ih/zoom/2)':s={width}x{height}:fps={fps}")
@@ -5967,8 +6001,8 @@ def _prepare_scene_clip(
 
         # Scale up first for zoompan headroom, then zoompan to target size
         scale_w, scale_h = width * 2, height * 2
-        vf = (f"scale={scale_w}:{scale_h}:flags=lanczos:force_original_aspect_ratio=decrease,"
-              f"pad={scale_w}:{scale_h}:(ow-iw)/2:(oh-ih)/2:color=black,"
+          vf = (f"scale={scale_w}:{scale_h}:flags=lanczos:force_original_aspect_ratio=increase,"
+              f"crop={scale_w}:{scale_h},"
               f"zoompan={zp_expr}:d={total_frames}:s={width}x{height}:fps={fps}")
 
         if color_enhance:
@@ -6013,8 +6047,8 @@ def _build_ass_style(style: SubtitleStyle) -> str:
     return (
         "[Script Info]\n"
         "ScriptType: v4.00+\n"
-        "PlayResX: 1080\n"
-        "PlayResY: 1920\n"
+        "PlayResX: 1920\n"
+        "PlayResY: 1080\n"
         "\n"
         "[V4+ Styles]\n"
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
@@ -7544,8 +7578,64 @@ def validate_video(req: ValidateVideoRequest):
         "issues": subtitle_issues,
     }
 
+    # --- 6. Engagement Validation ---
+    engagement_score = 1.0
+    engagement_issues = []
+
+    # Prefer scene-level timing if present (audioResult duration), fallback to scene duration.
+    scene_durations = []
+    narrations = []
+    for s in req.scenes or []:
+        ar = s.get("audioResult", {}) if isinstance(s, dict) else {}
+        d = ar.get("duration") if isinstance(ar, dict) else None
+        if not d:
+            d = s.get("duration") if isinstance(s, dict) else None
+        if d:
+            try:
+                scene_durations.append(float(d))
+            except Exception:
+                pass
+        if isinstance(s, dict) and s.get("narration"):
+            narrations.append(str(s.get("narration", "")))
+
+    if scene_durations:
+        avg_scene = sum(scene_durations) / len(scene_durations)
+        if avg_scene > 11.5:
+            engagement_issues.append(f"Average scene too slow ({avg_scene:.1f}s); target 6-10s")
+            engagement_score -= 0.25
+        if avg_scene < 4.5:
+            engagement_issues.append(f"Average scene too fast ({avg_scene:.1f}s); pacing may feel rushed")
+            engagement_score -= 0.1
+
+    if narrations:
+        def _norm_local(text: str) -> str:
+            t = re.sub(r"[^a-z0-9\s]", " ", text.lower())
+            return re.sub(r"\s+", " ", t).strip()
+        unique_ratio = len({_norm_local(n) for n in narrations}) / max(1, len(narrations))
+        if unique_ratio < 0.75:
+            engagement_issues.append(f"Narration repetition detected (unique ratio {unique_ratio:.2f})")
+            engagement_score -= 0.3
+
+        first_norm = _norm_local(narrations[0])
+        hook_tokens = ("suddenly", "mystery", "warning", "before", "secret", "storm", "alarm")
+        if not any(tok in first_norm for tok in hook_tokens):
+            engagement_issues.append("Opening hook is weak in first scene")
+            engagement_score -= 0.15
+
+    categories["engagement"] = {
+        "score": max(0.0, engagement_score),
+        "issues": engagement_issues,
+    }
+
     # --- Calculate overall quality score ---
-    weights = {"images": 0.3, "audio": 0.25, "video": 0.25, "completeness": 0.15, "subtitles": 0.05}
+    weights = {
+        "images": 0.25,
+        "audio": 0.2,
+        "video": 0.2,
+        "completeness": 0.15,
+        "subtitles": 0.05,
+        "engagement": 0.15,
+    }
     overall_score = sum(categories[cat]["score"] * w for cat, w in weights.items())
     
     passed = overall_score >= req.minQualityScore
